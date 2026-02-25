@@ -61,7 +61,7 @@ def chat(session_id: str, question: str) -> str:
     docs = retriever.invoke(question)
     context = "\n\n".join(doc.page_content for doc in docs)
 
-    # Call LLM
+    # lcel
     chain = prompt | llm
     response = chain.invoke(
         {

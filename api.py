@@ -2,16 +2,28 @@ from dotenv import load_dotenv
 import os
 import shutil
 import uuid
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends,Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from ingest import ingest_pdf
 from rag_pipeline import chat, clear_session
 from auth import verify_api_key
-
+from rate_limiter import limiter
+from slowapi.errors import RateLimitExceeded
 
 load_dotenv()
 
 app = FastAPI()
+app.state.limiter = limiter
+
+@app.exception_handlers(RateLimitExceeded)
+async def rate_limit_handler(request:Request,exc:RateLimitExceeded)
+    return JSONResponse(
+        status_code=429,
+        content={"detail":f"Rate limit exceeded.Try again later"}
+    )
+
+
 
 UPLOAD_DIR = "uploaded_pdfs"
 MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -37,13 +49,10 @@ class IngestResponse(BaseModel):
     status: str
 
 
-# ── Helpers ──────────────────────────────────────────────
 def validate_file(file: UploadFile):
-    # Check filename exists
     if not file.filename or file.filename.strip() == "":
         raise HTTPException(status_code=400, detail="Filename cannot be empty.")
 
-    # Check extension
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -83,7 +92,6 @@ def cleanup_file(path: str):
         pass
 
 
-# ── Routes ───────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {"status": "working fine"}
@@ -92,6 +100,7 @@ async def root():
 @app.post(
     "/ingest", response_model=IngestResponse, dependencies=[Depends(verify_api_key)]
 )
+@limiter.limit("5/minute")
 async def ingest(file: UploadFile = File(...)):
     validate_file(file)
 
@@ -114,6 +123,7 @@ async def ingest(file: UploadFile = File(...)):
 
 
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
 async def chat_endpoint(request: ChatRequest):
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -133,6 +143,7 @@ async def chat_endpoint(request: ChatRequest):
 
 
 @app.delete("/session/{session_id}")
+@limiter.limit("20/minute")
 async def delete_session(session_id: str, dependencies=[Depends(verify_api_key)]):
     clear_session(session_id)
     return {"message": f"Session {session_id} cleared"}
