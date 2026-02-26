@@ -5,8 +5,11 @@ langchain-community
 langchain-openai
 langchain-qdrant
 langchain-text-splitters
+# langchain-huggingface
 qdrant-client
 pypdf
 python-dotenv
 slowapi
 aiofiles
+python-multipart
+# sentence-transformers

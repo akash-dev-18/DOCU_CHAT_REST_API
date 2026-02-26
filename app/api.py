@@ -5,10 +5,10 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
 
 from pydantic import BaseModel
-from ingest import ingest_pdf
-from rag_pipeline import chat, clear_session, chat_stream
-from auth import verify_api_key
-from rate_limiter import limiter
+from app.ingest import ingest_pdf
+from app.rag_pipeline import chat, clear_session, chat_stream
+from app.auth import verify_api_key
+from app.rate_limiter import limiter
 from slowapi.errors import RateLimitExceeded
 
 load_dotenv()

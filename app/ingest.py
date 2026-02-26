@@ -2,7 +2,8 @@ from dotenv import load_dotenv
 import os
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+
+# from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
@@ -12,7 +13,7 @@ from langchain_openai import OpenAIEmbeddings
 load_dotenv()
 
 COLLECTION_NAME = "pdf_chat"
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = os.getenv("QDRANT_URL")
 
 
 async def ingest_pdf(pdf_path: str):
@@ -32,7 +33,10 @@ async def ingest_pdf(pdf_path: str):
 
     # embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-    client = QdrantClient(url=QDRANT_URL)
+    client = QdrantClient(
+        url=os.getenv("QDRANT_URL"),
+        api_key=os.getenv("QDRANT_API_KEY"),
+    )
 
     if client.collection_exists(COLLECTION_NAME):
         client.delete_collection(COLLECTION_NAME)

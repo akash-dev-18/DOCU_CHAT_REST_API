@@ -1,7 +1,8 @@
 import os
 from typing import AsyncGenerator
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+
+# from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
@@ -10,7 +11,7 @@ from qdrant_client import QdrantClient
 
 
 COLLECTION_NAME = "pdf_chat"
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = os.getenv("QDRANT_URL")
 
 llm = ChatOpenAI(
     model="upstage/solar-pro-3:free",
@@ -53,7 +54,7 @@ session_histories: dict = {}
 
 
 def get_retriever():
-    client = QdrantClient(url=QDRANT_URL)
+    client = QdrantClient(url=QDRANT_URL, api_key=os.getenv("QDRANT_API_KEY"))
     vector_store = QdrantVectorStore(
         client=client,
         collection_name=COLLECTION_NAME,
