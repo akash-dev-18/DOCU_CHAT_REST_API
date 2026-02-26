@@ -1,17 +1,16 @@
-from dotenv import load_dotenv
 import os
+from typing import AsyncGenerator
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
 
-load_dotenv()
 
 COLLECTION_NAME = "pdf_chat"
 QDRANT_URL = "http://localhost:6333"
-
 
 llm = ChatOpenAI(
     model="upstage/solar-pro-3:free",
@@ -20,18 +19,20 @@ llm = ChatOpenAI(
     temperature=0.2,
 )
 
-
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-
-
-client = QdrantClient(url=QDRANT_URL)
-vector_store = QdrantVectorStore(
-    client=client,
-    collection_name=COLLECTION_NAME,
-    embedding=embeddings,
+llm_stream = ChatOpenAI(
+    model="upstage/solar-pro-3:free",
+    openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+    openai_api_base="https://openrouter.ai/api/v1",
+    temperature=0.2,
+    streaming=True,
 )
-retriever = vector_store.as_retriever(search_kwargs={"k": 4})
 
+embeddings = OpenAIEmbeddings(
+    model="openai/text-embedding-3-small",
+    openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+    openai_api_base="https://openrouter.ai/api/v1",
+)
+# embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 prompt = ChatPromptTemplate.from_messages(
     [
@@ -48,22 +49,31 @@ Context:
     ]
 )
 
-
 session_histories: dict = {}
 
 
-def chat(session_id: str, question: str) -> str:
+def get_retriever():
+    client = QdrantClient(url=QDRANT_URL)
+    vector_store = QdrantVectorStore(
+        client=client,
+        collection_name=COLLECTION_NAME,
+        embedding=embeddings,
+    )
+    return vector_store.as_retriever(search_kwargs={"k": 4})
+
+
+async def chat(session_id: str, question: str) -> str:
     if session_id not in session_histories:
         session_histories[session_id] = []
 
     chat_history = session_histories[session_id]
 
-    docs = retriever.invoke(question)
+    retriever = get_retriever()
+    docs = await retriever.ainvoke(question)
     context = "\n\n".join(doc.page_content for doc in docs)
 
-    # lcel
     chain = prompt | llm
-    response = chain.invoke(
+    response = await chain.ainvoke(
         {
             "context": context,
             "chat_history": chat_history,
@@ -72,12 +82,39 @@ def chat(session_id: str, question: str) -> str:
     )
 
     answer = response.content
-
-    # history updation
     chat_history.append(HumanMessage(content=question))
     chat_history.append(AIMessage(content=answer))
 
     return answer
+
+
+async def chat_stream(session_id: str, question: str) -> AsyncGenerator[str, None]:
+    if session_id not in session_histories:
+        session_histories[session_id] = []
+
+    chat_history = session_histories[session_id]
+
+    retriever = get_retriever()
+    docs = await retriever.ainvoke(question)
+    context = "\n\n".join(doc.page_content for doc in docs)
+
+    chain = prompt | llm_stream
+    full_answer = ""
+
+    async for chunk in chain.astream(
+        {
+            "context": context,
+            "chat_history": chat_history,
+            "question": question,
+        }
+    ):
+        token = chunk.content
+        if token:
+            full_answer += token
+            yield token
+
+    chat_history.append(HumanMessage(content=question))
+    chat_history.append(AIMessage(content=full_answer))
 
 
 def clear_session(session_id: str):

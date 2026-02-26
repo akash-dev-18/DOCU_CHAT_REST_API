@@ -4,10 +4,13 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
-from qdrant_client import AsyncQdrantClient
+from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
+from langchain_openai import OpenAIEmbeddings
+
 
 load_dotenv()
+
 COLLECTION_NAME = "pdf_chat"
 QDRANT_URL = "http://localhost:6333"
 
@@ -19,24 +22,33 @@ async def ingest_pdf(pdf_path: str):
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.split_documents(docs)
+    print(f"Created {len(chunks)} chunks")
 
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = OpenAIEmbeddings(
+        model="openai/text-embedding-3-small",
+        openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+        openai_api_base="https://openrouter.ai/api/v1",
+    )
 
-    # QdrantClient
-    client = AsyncQdrantClient(url=QDRANT_URL)
-    if await client.collection_exists(COLLECTION_NAME):
-        await client.delete_collection(COLLECTION_NAME)
+    # embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-    await client.create_collection(
+    client = QdrantClient(url=QDRANT_URL)
+
+    if client.collection_exists(COLLECTION_NAME):
+        client.delete_collection(COLLECTION_NAME)
+
+    client.create_collection(  # 👈 no await needed
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
     )
 
-    # vectore storing
     vector_store = QdrantVectorStore(
-        client=client, collection_name=COLLECTION_NAME, embedding=embeddings
+        client=client,
+        collection_name=COLLECTION_NAME,
+        embedding=embeddings,
     )
 
-    await vector_store.add_documents(chunks)
+    await vector_store.aadd_documents(chunks)
+    print("FILE INDEXED")
 
     return {"chunks_created": len(chunks), "status": "success"}

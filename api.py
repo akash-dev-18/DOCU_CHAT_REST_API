@@ -1,12 +1,12 @@
 from dotenv import load_dotenv
 import os
-import shutil
 import uuid
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends,Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
+
 from pydantic import BaseModel
 from ingest import ingest_pdf
-from rag_pipeline import chat, clear_session
+from rag_pipeline import chat, clear_session, chat_stream
 from auth import verify_api_key
 from rate_limiter import limiter
 from slowapi.errors import RateLimitExceeded
@@ -16,13 +16,12 @@ load_dotenv()
 app = FastAPI()
 app.state.limiter = limiter
 
-@app.exception_handlers(RateLimitExceeded)
-async def rate_limit_handler(request:Request,exc:RateLimitExceeded)
-    return JSONResponse(
-        status_code=429,
-        content={"detail":f"Rate limit exceeded.Try again later"}
-    )
 
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429, content={"detail": "Rate limit exceeded. Try again later."}
+    )
 
 
 UPLOAD_DIR = "uploaded_pdfs"
@@ -75,7 +74,7 @@ def save_upload(file: UploadFile) -> tuple[str, str]:
 
     if len(contents) > MAX_FILE_SIZE:
         raise HTTPException(
-            400, f"large file {MAX_FILE_SIZE // (1024 * 1024)}MB allowed"
+            400, f"File too large. Max {MAX_FILE_SIZE // (1024 * 1024)}MB allowed"
         )
 
     with open(save_path, "wb") as f:
@@ -94,20 +93,20 @@ def cleanup_file(path: str):
 
 @app.get("/")
 async def root():
-    return {"status": "working fine"}
+    return RedirectResponse(url="/docs")
 
 
 @app.post(
     "/ingest", response_model=IngestResponse, dependencies=[Depends(verify_api_key)]
 )
 @limiter.limit("5/minute")
-async def ingest(file: UploadFile = File(...)):
+async def ingest(request: Request, file: UploadFile = File(...)):
     validate_file(file)
 
     unique_name, save_path = save_upload(file)
 
     try:
-        result = ingest_pdf(save_path)
+        result = await ingest_pdf(save_path)
     except Exception as e:
         cleanup_file(save_path)
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
@@ -124,26 +123,58 @@ async def ingest(file: UploadFile = File(...)):
 
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("30/minute")
-async def chat_endpoint(request: ChatRequest):
-    if not request.question.strip():
+async def chat_endpoint(request: Request, body: ChatRequest):
+    if not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    if not request.session_id.strip():
+    if not body.session_id.strip():
         raise HTTPException(status_code=400, detail="session_id cannot be empty.")
 
     try:
-        answer = chat(
-            session_id=request.session_id,
-            question=request.question,
+
+        answer = await chat(
+            session_id=body.session_id,
+            question=body.question,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
 
-    return ChatResponse(answer=answer, session_id=request.session_id)
+    return ChatResponse(answer=answer, session_id=body.session_id)
 
 
-@app.delete("/session/{session_id}")
+@app.post("/chat/stream", dependencies=[Depends(verify_api_key)])
 @limiter.limit("20/minute")
-async def delete_session(session_id: str, dependencies=[Depends(verify_api_key)]):
+async def chat_stream_endpoint(request: Request, body: ChatRequest):
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+    if not body.session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id cannot be empty.")
+
+    async def token_generator():
+        try:
+            async for token in chat_stream(
+                session_id=body.session_id,
+                question=body.question,
+            ):
+                yield f"data: {token}\n\n"
+        except Exception as e:
+            yield f"data: [ERROR] {str(e)}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        token_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.delete("/session/{session_id}", dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+async def delete_session(request: Request, session_id: str):
     clear_session(session_id)
     return {"message": f"Session {session_id} cleared"}
