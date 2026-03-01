@@ -257,6 +257,3 @@ x-api-key: <key>
 3. Ask questions via `/chat` or `/chat/stream` using the same `session_id`.
 4. Clear conversation with `DELETE /session/{session_id}` when needed.
 
-## License
-
-Add your preferred license (MIT, Apache-2.0, etc.) in this section.
